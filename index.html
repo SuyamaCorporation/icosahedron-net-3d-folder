@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Icosahedron Net Fold Animation</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #030712; color: #f1f5f9; }
+  #scene3d {
+    perspective: 900px;
+    perspective-origin: 50% 50%;
+  }
+  #shape3d {
+    transform-style: preserve-3d;
+    transform: rotateX(var(--rx,20deg)) rotateY(var(--ry,-30deg));
+    transition: transform 0.05s;
+  }
+  .face3d {
+    position: absolute;
+    transform-style: preserve-3d;
+    backface-visibility: visible;
+    opacity: 0.88;
+  }
+  .face3d polygon {
+    stroke: rgba(255,255,255,0.3);
+    stroke-width: 1.5;
+  }
+  #net-svg polygon {
+    stroke: rgba(255,255,255,0.3);
+    stroke-width: 1.5;
+    transition: opacity 0.4s;
+  }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4">
+
+<h1 class="text-2xl font-bold text-purple-400 mt-4 mb-1">Icosahedron Net Fold</h1>
+<p class="text-gray-400 text-sm mb-4">20-face net that folds into a 3D icosahedron</p>
+
+<div class="flex gap-3 mb-4 flex-wrap justify-center">
+  <button id="btn-fold" onclick="startFold()" class="px-5 py-2 bg-purple-600 hover:bg-purple-500 rounded-xl font-semibold transition">Fold ▶</button>
+  <button id="btn-unfold" onclick="startUnfold()" class="px-5 py-2 bg-gray-700 hover:bg-gray-600 rounded-xl font-semibold transition" disabled>Unfold ◀</button>
+  <button onclick="resetView()" class="px-5 py-2 bg-gray-800 hover:bg-gray-700 rounded-xl font-semibold transition">Reset View</button>
+</div>
+
+<div id="state-label" class="text-gray-400 text-sm mb-3 font-semibold">Net view — click Fold to animate</div>
+
+<!-- Net SVG (shown when not folded) -->
+<div id="net-container" class="flex items-center justify-center">
+  <svg id="net-svg" viewBox="0 0 480 260" width="480" height="260" aria-label="Icosahedron net"></svg>
+</div>
+
+<!-- 3D view (shown when folded) -->
+<div id="view3d" class="hidden">
+  <div id="scene3d" class="w-full flex items-center justify-center" style="height:320px;">
+    <div id="shape3d" style="width:0;height:0;position:relative;--rx:20deg;--ry:-30deg;"></div>
+  </div>
+  <p class="text-center text-gray-500 text-xs mt-2">Drag to rotate</p>
+</div>
+
+<script>
+// Icosahedron geometry
+const PHI = (1 + Math.sqrt(5)) / 2;
+const R = 100; // circumradius
+
+// 12 vertices of icosahedron
+function icoVerts(r) {
+  const v = [];
+  const pairs = [[-1,PHI,0],[1,PHI,0],[-1,-PHI,0],[1,-PHI,0],
+                 [0,-1,PHI],[0,1,PHI],[0,-1,-PHI],[0,1,-PHI],
+                 [PHI,0,-1],[PHI,0,1],[-PHI,0,-1],[-PHI,0,1]];
+  const len = Math.sqrt(1 + PHI*PHI);
+  return pairs.map(([x,y,z]) => [x/len*r, y/len*r, z/len*r]);
+}
+
+// 20 faces (vertex indices)
+const ICO_FACES = [
+  [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+  [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+  [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+  [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]
+];
+
+const FACE_COLORS = [
+  '#a855f7','#7c3aed','#ec4899','#e11d48','#f97316',
+  '#eab308','#22c55e','#14b8a6','#06b6d4','#3b82f6',
+  '#8b5cf6','#d946ef','#f43f5e','#fb923c','#fbbf24',
+  '#4ade80','#2dd4bf','#38bdf8','#818cf8','#c084fc'
+];
+
+const verts = icoVerts(R);
+
+// Build net layout (flat 2D positions for 20 triangles)
+// Using a standard icosahedron net: 2 rows of 10 triangles
+// Row 1 (top 5 + 5 middle-up): triangles 0-9
+// Row 2 (5 middle-down + bottom 5): triangles 10-19
+const S = 52; // side length in net
+const H = S * Math.sqrt(3)/2;
+const OFF_X = 10, OFF_Y = 10;
+
+function netTri(col, row, up) {
+  // col: 0-9, row: 0-1, up: bool (pointing up)
+  const cx = OFF_X + col * S/2 + S/2;
+  const cy = OFF_Y + row * H;
+  if (up) {
+    return [[cx - S/2, cy + H], [cx + S/2, cy + H], [cx, cy]];
+  } else {
+    return [[cx - S/2, cy], [cx + S/2, cy], [cx, cy + H]];
+  }
+}
+
+// Net: row0: up,dn,up,dn,up,dn,up,dn,up,dn  row1: same but offset
+// Standard net layout for icosahedron (one popular variant)
+const netFaces = [];
+for (let i=0;i<5;i++) {
+  netFaces.push(netTri(i*2, 0, true));      // top row up triangles
+  netFaces.push(netTri(i*2+1, 0, false));   // top row down
+}
+for (let i=0;i<5;i++) {
+  netFaces.push(netTri(i*2, 1, true));      // bottom row up
+  netFaces.push(netTri(i*2+1, 1, false));   // bottom row down
+}
+
+// Draw net
+function drawNet(t) {
+  // t: 0=full net, 1=fully folded (invisible)
+  const svg = document.getElementById('net-svg');
+  svg.innerHTML = '';
+  netFaces.forEach((pts, i) => {
+    const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    const points = pts.map(p => p.join(',')).join(' ');
+    poly.setAttribute('points', points);
+    poly.setAttribute('fill', FACE_COLORS[i]);
+    poly.setAttribute('opacity', String(1 - t * 0.8));
+    svg.appendChild(poly);
+
+    // Label
+    if (t < 0.3) {
+      const cx = pts.reduce((s,p)=>s+p[0],0)/3;
+      const cy = pts.reduce((s,p)=>s+p[1],0)/3;
+      const txt = document.createElementNS('http://www.w3.org/2000/svg','text');
+      txt.setAttribute('x', String(cx));
+      txt.setAttribute('y', String(cy+4));
+      txt.setAttribute('text-anchor','middle');
+      txt.setAttribute('font-size','10');
+      txt.setAttribute('fill','rgba(255,255,255,0.7)');
+      txt.setAttribute('opacity', String(1-t*3));
+      txt.textContent = String(i+1);
+      svg.appendChild(txt);
+    }
+  });
+}
+
+// Build 3D shape faces as CSS 3D
+function build3D() {
+  const shape = document.getElementById('shape3d');
+  shape.innerHTML = '';
+  const faceSize = 60;
+  const r = faceSize * 0.9;
+
+  ICO_FACES.forEach((fi, idx) => {
+    const [a,b,c] = fi.map(vi => verts[vi]);
+    // Compute face center
+    const cx = (a[0]+b[0]+c[0])/3;
+    const cy = (a[1]+b[1]+c[1])/3;
+    const cz = (a[2]+b[2]+c[2])/3;
+    // Normal
+    const ab = [b[0]-a[0],b[1]-a[1],b[2]-a[2]];
+    const ac = [c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+    const nx = ab[1]*ac[2]-ab[2]*ac[1];
+    const ny = ab[2]*ac[0]-ab[0]*ac[2];
+    const nz = ab[0]*ac[1]-ab[1]*ac[0];
+    const nl = Math.sqrt(nx*nx+ny*ny+nz*nz);
+
+    // Project vertices to 2D face coords
+    const ux = ab[0]/Math.sqrt(ab[0]**2+ab[1]**2+ab[2]**2);
+    const uy = ab[1]/Math.sqrt(ab[0]**2+ab[1]**2+ab[2]**2);
+    const uz = ab[2]/Math.sqrt(ab[0]**2+ab[1]**2+ab[2]**2);
+    const vx = ny/nl, vy = nz/nl; // simplified
+
+    const div = document.createElement('div');
+    div.className = 'face3d';
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS,'svg');
+    svg.setAttribute('width','220'); svg.setAttribute('height','220');
+    svg.style.position='absolute';
+    svg.style.overflow='visible';
+
+    // Map 3D face to 2D SVG around center
+    function proj(v) {
+      const dx=v[0]-cx, dy=v[1]-cy, dz=v[2]-cz;
+      const u=[ab[0],ab[1],ab[2]]; const ulen=Math.sqrt(u[0]**2+u[1]**2+u[2]**2);
+      const un=[u[0]/ulen,u[1]/ulen,u[2]/ulen];
+      const vn=[ny/nl,nz/nl,-(nx+nz)/nl]; // approximate v direction
+      const vlen=Math.sqrt(vn[0]**2+vn[1]**2+vn[2]**2);
+      const uvn=[vn[0]/vlen,vn[1]/vlen,vn[2]/vlen];
+      const scale=1.8;
+      return [
+        110 + (dx*un[0]+dy*un[1]+dz*un[2])*scale,
+        110 + (dx*uvn[0]+dy*uvn[1]+dz*uvn[2])*scale
+      ];
+    }
+
+    const pts2d = [a,b,c].map(proj);
+    const poly = document.createElementNS(svgNS,'polygon');
+    poly.setAttribute('points', pts2d.map(p=>p.join(',')).join(' '));
+    poly.setAttribute('fill', FACE_COLORS[idx]);
+    svg.appendChild(poly);
+    div.appendChild(svg);
+
+    // CSS 3D transform: translate to center + apply rotation to face normal
+    const dist = Math.sqrt(cx*cx+cy*cy+cz*cz);
+    // rotateX and rotateY to point face outward
+    const rotY = Math.atan2(cx, cz) * 180 / Math.PI;
+    const rotX = -Math.atan2(cy, Math.sqrt(cx*cx+cz*cz)) * 180 / Math.PI;
+
+    div.style.transform = `rotateY(${rotY}deg) rotateX(${rotX}deg) translateZ(${dist}px)`;
+    div.style.width = '220px';
+    div.style.height = '220px';
+    div.style.marginLeft = '-110px';
+    div.style.marginTop = '-110px';
+    shape.appendChild(div);
+  });
+}
+
+// Animation state
+let animState = 'net'; // 'net','folding','folded','unfolding'
+let animT = 0;
+let animFrame = null;
+
+function startFold() {
+  if (animState === 'folding' || animState === 'folded') return;
+  animState = 'folding';
+  document.getElementById('btn-fold').disabled = true;
+  document.getElementById('state-label').textContent = 'Folding…';
+  build3D();
+  document.getElementById('shape3d').style.opacity = '0';
+
+  let t = 0;
+  const step = () => {
+    t += 0.015;
+    drawNet(Math.min(t, 1));
+    if (t >= 1) {
+      document.getElementById('net-container').classList.add('hidden');
+      document.getElementById('view3d').classList.remove('hidden');
+      document.getElementById('shape3d').style.opacity = '1';
+      document.getElementById('shape3d').style.transition = 'opacity 0.5s';
+      animState = 'folded';
+      document.getElementById('btn-unfold').disabled = false;
+      document.getElementById('state-label').textContent = '3D shape — drag to rotate';
+    } else {
+      requestAnimationFrame(step);
+    }
+  };
+  requestAnimationFrame(step);
+}
+
+function startUnfold() {
+  if (animState !== 'folded') return;
+  animState = 'unfolding';
+  document.getElementById('btn-unfold').disabled = true;
+  document.getElementById('view3d').classList.add('hidden');
+  document.getElementById('net-container').classList.remove('hidden');
+  let t = 1;
+  const step = () => {
+    t -= 0.02;
+    drawNet(Math.max(t, 0));
+    if (t <= 0) {
+      animState = 'net';
+      document.getElementById('btn-fold').disabled = false;
+      document.getElementById('state-label').textContent = 'Net view — click Fold to animate';
+    } else {
+      requestAnimationFrame(step);
+    }
+  };
+  requestAnimationFrame(step);
+}
+
+function resetView() {
+  document.getElementById('shape3d').style.setProperty('--rx','20deg');
+  document.getElementById('shape3d').style.setProperty('--ry','-30deg');
+}
+
+// Mouse drag rotation
+let isDragging = false, lastX = 0, lastY = 0;
+let rx = 20, ry = -30;
+
+document.getElementById('scene3d').addEventListener('mousedown', e => { isDragging=true; lastX=e.clientX; lastY=e.clientY; });
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  ry += dx * 0.5; rx -= dy * 0.5;
+  lastX=e.clientX; lastY=e.clientY;
+  document.getElementById('shape3d').style.setProperty('--rx', rx+'deg');
+  document.getElementById('shape3d').style.setProperty('--ry', ry+'deg');
+});
+document.addEventListener('mouseup', () => isDragging=false);
+
+// Touch support
+document.getElementById('scene3d').addEventListener('touchstart', e => {
+  isDragging=true; lastX=e.touches[0].clientX; lastY=e.touches[0].clientY; e.preventDefault();
+},{passive:false});
+document.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  const dx=e.touches[0].clientX-lastX, dy=e.touches[0].clientY-lastY;
+  ry+=dx*0.5; rx-=dy*0.5;
+  lastX=e.touches[0].clientX; lastY=e.touches[0].clientY;
+  document.getElementById('shape3d').style.setProperty('--rx',rx+'deg');
+  document.getElementById('shape3d').style.setProperty('--ry',ry+'deg');
+  e.preventDefault();
+},{passive:false});
+document.addEventListener('touchend',()=>isDragging=false);
+
+// Init
+drawNet(0);
+</script>
+</body>
+</html>
